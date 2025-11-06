@@ -11,17 +11,19 @@
  */
 package com.thoughtworks.xstream.converters.reflection;
 
+import com.thoughtworks.xstream.core.JVM;
+
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-
 
 /**
  * Instantiates a new object bypassing the constructor using undocumented internal JDK features.
  * <p>
  * The code in the constructor will never be executed and parameters do not have to be known. This is the same method
- * used by the internals of standard Java serialization, but relies on internal code (sun.misc.Unsafe) that may not be
- * present on all JVMs.
+ * used by the internals of standard Java serialization, but relies on internal code (jdk.internal.misc.Unsafe).
  * <p>
  * <p>
  * The implementation will use the same internals to write into fields. This is a lot faster and was additionally the
@@ -38,6 +40,7 @@ public class SunUnsafeReflectionProvider extends SunLimitedUnsafeReflectionProvi
     // references to the Field key are kept in the FieldDictionary
     private transient ConcurrentMap<Field, Long> fieldOffsetCache;
 
+    private static final Method PUT_REFERENCE_UNSAFE_METHOD = getPutReferenceMethod();
     /**
      * @since 1.4.7
      */
@@ -91,7 +94,7 @@ public class SunUnsafeReflectionProvider extends SunLimitedUnsafeReflectionProvi
                     throw ex;
                 }
             } else {
-                unsafe.putObject(object, offset, value);
+              putReferenceUnsafe(object, field, offset, value);
             }
 
         } catch (final IllegalArgumentException e) {
@@ -114,6 +117,29 @@ public class SunUnsafeReflectionProvider extends SunLimitedUnsafeReflectionProvi
     private Object readResolve() {
         init();
         return this;
+    }
+
+    private static Method getPutReferenceMethod() {
+      Class<?> unsafeClass = unsafe.getClass();
+      String methodName = "putObject";
+      if(JVM.isVersion(12)) {
+        methodName = "putReference";
+      }
+      try {
+        return unsafeClass.getDeclaredMethod(methodName, Object.class, long.class, Object.class);
+      } catch (NoSuchMethodException e) {
+        throw new RuntimeException(e);
+      }
+    }
+
+    private void putReferenceUnsafe(Object object, Field field, long offset, Object value) {
+      try {
+        PUT_REFERENCE_UNSAFE_METHOD.invoke(unsafe, object, offset, value);
+      } catch (IllegalAccessException | InvocationTargetException e) {
+        final ObjectAccessException ex = new ObjectAccessException("Cannot set field", e);
+        ex.add("field", object.getClass() + "." + field.getName());
+        throw ex;
+      }
     }
 
     @Override
